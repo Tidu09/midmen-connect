@@ -67,9 +67,9 @@
     show(el("h1", { text: "Enter your code" }), el("p", { class: "muted", text: "We sent an 8-digit code to " + email + "." }), el("label", { for: "code", text: "Code" }), input, el("div", { class: "row" }, [go, back]));
   }
 
-  function decide(decision, btns) {
+  function decide(decision, btns, write) {
     btns.forEach(function (b) { b.disabled = true; });
-    fetch(MCP + "/oauth/approve", { method: "POST", headers: { authorization: "Bearer " + session.access_token, "content-type": "application/json" }, body: JSON.stringify({ req: reqId, decision: decision }) })
+    fetch(MCP + "/oauth/approve", { method: "POST", headers: { authorization: "Bearer " + session.access_token, "content-type": "application/json" }, body: JSON.stringify({ req: reqId, decision: decision, write: write === true }) })
       .then(function (r) { return r.json().catch(function () { return {}; }).then(function (j) { return { ok: r.ok, json: j }; }); })
       .then(function (r) {
         if (!r.ok || !r.json.redirect_to) { btns.forEach(function (b) { b.disabled = false; }); return errBox(r.json.error_description || "Could not complete the sign-in. Go back to Claude and try again."); }
@@ -82,8 +82,11 @@
   function stepAllow() {
     var allow = el("button", { class: "primary", type: "button", text: "Allow" });
     var deny = el("button", { type: "button", text: "Don't allow" });
-    allow.onclick = function () { decide("allow", [allow, deny]); };
-    deny.onclick = function () { decide("deny", [allow, deny]); };
+    // off by default: only a ticked box gives the connection the right to change things (publish models, register and stamp documents, record citations)
+    var tick = el("input", { type: "checkbox", id: "write" });
+    var tickRow = el("label", { class: "tick", for: "write" }, [tick, el("span", { text: "Let Claude change this workspace: create workspaces, publish models, register and stamp documents, record source citations. You must be an owner or editor of the workspace; viewers can never change it." })]);
+    allow.onclick = function () { decide("allow", [allow, deny, tick], tick.checked); };
+    deny.onclick = function () { decide("deny", [allow, deny, tick], false); };
     show(
       el("h1", { text: "Allow " + details.client_name + "?" }),
       el("p", { class: "muted", text: "Signed in as " + email }),
@@ -93,7 +96,8 @@
         el("li", { text: "read the published numbers of the workspaces you can read, and where each comes from" }),
         el("li", { text: "read change reports between versions" }),
       ]),
-      el("p", { text: "It cannot change anything, create or edit files, or use AI through MIDMEN. Every call is logged, and you can disconnect it any time in the Excel add-in." }),
+      el("p", { text: "Unless you tick the box below it cannot change anything. It never uses AI through MIDMEN. Every call is logged, and you can disconnect it any time in the Excel add-in." }),
+      tickRow,
       el("div", { class: "row" }, [allow, deny]));
   }
 
