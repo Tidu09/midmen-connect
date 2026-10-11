@@ -7,7 +7,8 @@
   var MCP = SUPABASE_URL + "/functions/v1/mcp";
   var card = document.getElementById("card");
   var reqId = new URLSearchParams(location.search).get("req") || "";
-  var details = null, session = null, email = "";
+  var details = null, session = null, email = "", welcome = null;
+  var BETA = "MIDMEN is in a free pilot (beta). Use public or non-confidential data, and don't upload anything your client agreements don't allow. Pilot accounts are deleted when the public trial starts.";
 
   if (window.top !== window.self) { document.body.textContent = "This page cannot be shown inside another page."; return; }
 
@@ -39,14 +40,15 @@
       email = input.value.trim();
       if (!email) return errBox("Enter your email.");
       go.disabled = true; go.textContent = "Sending…";
-      authCall("otp", { email: email, create_user: false }).then(function (r) {
-        if (!r.ok) { go.disabled = false; go.textContent = "Email me a code"; return errBox(r.status === 422 || r.status === 400 ? "No MIDMEN account for that email. Use the email you sign in with in Excel." : "Could not send the code. Try again in a minute."); }
+      // M8 pilot: sign-up is open, so a first sign-in here creates the account (same 8-digit code as in the Office pane)
+      authCall("otp", { email: email, create_user: true }).then(function (r) {
+        if (!r.ok) { go.disabled = false; go.textContent = "Email me a code"; return errBox(r.status === 429 ? "Too many codes were asked for just now. Wait a minute and try again." : r.status === 422 || r.status === 400 ? "That email address was not accepted. Check it and try again." : "Could not send the code. Try again in a minute."); }
         stepCode();
       }).catch(function () { go.disabled = false; go.textContent = "Email me a code"; errBox("No connection. Try again."); });
     };
     input.onkeydown = function (e) { if (e.key === "Enter") go.click(); };
-    show(el("h1", { text: "Sign in to MIDMEN" }), appLine(), el("p", { class: "muted", text: msg || "Use the same email you sign in with in the Excel add-in. We will email you an 8-digit code." }),
-      el("label", { for: "email", text: "Email" }), input, el("div", { class: "row" }, [go]));
+    show(el("h1", { text: "Sign in to MIDMEN" }), appLine(), el("p", { class: "muted", text: msg || "We will email you an 8-digit code. New to MIDMEN? This creates your free pilot account; already using the Office add-in? Use the same email." }),
+      el("label", { for: "email", text: "Email" }), input, el("div", { class: "row" }, [go]), el("p", { class: "note", text: BETA }));
   }
 
   function stepCode() {
@@ -60,7 +62,7 @@
       go.disabled = true; go.textContent = "Checking…";
       authCall("verify", { type: "email", email: email, token: code }).then(function (r) {
         if (!r.ok || !r.json.access_token) { go.disabled = false; go.textContent = "Continue"; return errBox("That code did not work. Check it and try again, or request a new one."); }
-        session = r.json; stepAllow();
+        session = r.json; stepWelcome();
       }).catch(function () { go.disabled = false; go.textContent = "Continue"; errBox("No connection. Try again."); });
     };
     input.onkeydown = function (e) { if (e.key === "Enter") go.click(); };
@@ -79,24 +81,37 @@
       }).catch(function () { btns.forEach(function (b) { b.disabled = false; }); errBox("No connection. Try again."); });
   }
 
+  // first sign-in: notes that the beta note was shown and creates the sample workspace (a few seconds, once); never blocks the sign-in
+  function stepWelcome() {
+    show(el("h1", { text: "Setting up your account…" }), el("p", { class: "muted", text: "The first time takes a few seconds: MIDMEN prepares a sample workspace (Acme Industries, fictional) for you to try." }));
+    fetch(SUPABASE_URL + "/functions/v1/account", { method: "POST", headers: { authorization: "Bearer " + session.access_token, apikey: ANON_KEY, "content-type": "application/json" }, body: JSON.stringify({ action: "welcome", accept_beta: true }) })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (j) { welcome = j && j.ok ? j : null; stepAllow(); })
+      .catch(function () { stepAllow(); });
+  }
+
   function stepAllow() {
     var allow = el("button", { class: "primary", type: "button", text: "Allow" });
     var deny = el("button", { type: "button", text: "Don't allow" });
     // off by default: only a ticked box gives the connection the right to change things (publish models, register and stamp documents, record citations)
     var tick = el("input", { type: "checkbox", id: "write" });
-    var tickRow = el("label", { class: "tick", for: "write" }, [tick, el("span", { text: "Let Claude change this workspace: create workspaces, publish models, register and stamp documents, record source citations. You must be an owner or editor of the workspace; viewers can never change it." })]);
+    var tickRow = el("label", { class: "tick", for: "write" }, [tick, el("span", {}, [
+      el("strong", { text: "Let Claude change your workspaces" }),
+      document.createTextNode(" (off unless you tick it). Tick this if you want Claude to build things in MIDMEN: create a workspace, build and publish a model from your PDFs, record where each number comes from, and register and stamp Word or PowerPoint files. Leave it off if Claude should only read and explain published numbers. You can change it later by connecting again; viewers of a workspace can never change it."),
+    ])]);
     allow.onclick = function () { decide("allow", [allow, deny, tick], tick.checked); };
     deny.onclick = function () { decide("deny", [allow, deny, tick], false); };
     show(
       el("h1", { text: "Allow " + details.client_name + "?" }),
       el("p", { class: "muted", text: "Signed in as " + email }),
       appLine(),
+      welcome && welcome.first && welcome.sample && welcome.sample.state === "ready" ? el("p", { class: "ok", text: "Welcome to MIDMEN. Your sample workspace \u201c" + welcome.sample.name + "\u201d is ready: ask Claude about it, or use it in Excel." }) : document.createTextNode(""),
       el("p", { text: "It will be able to:" }),
       el("ul", {}, [
         el("li", { text: "read the published numbers of the workspaces you can read, and where each comes from" }),
         el("li", { text: "read change reports between versions" }),
       ]),
-      el("p", { text: "Unless you tick the box below it cannot change anything. It never uses AI through MIDMEN. Every call is logged, and you can disconnect it any time in the Excel add-in." }),
+      el("p", { text: "Unless you tick the box below it cannot change anything. Claude works on your own Claude plan: MIDMEN never runs AI for it. Every call is logged, and you can disconnect it any time in Claude's settings or the Excel add-in." }),
       tickRow,
       el("div", { class: "row" }, [allow, deny]));
   }
